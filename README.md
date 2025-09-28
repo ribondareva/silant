@@ -42,7 +42,7 @@ Swagger-документация API: http://127.0.0.1:8000/swagger/
 Перед началом работы необходимо загрузить данные о машинах, ТО и рекламациях из Excel-файла.  
 Для этого используется специальная management-команда parsing_excel  
 ```bash
-python manage.py parsing_excel "D:\vscode_programs\total_project\output.xlsx" --machines "машины" --to "ТО output" --claims "рекламация output" --hdr-machines 3 --hdr-to 1 --hdr-claims 2 --service service
+python manage.py parsing_excel "D:\vscode_programs\silant\backend\output.xlsx" --machines "машины" --to "ТО output" --claims "рекламация output" --hdr-machines 3 --hdr-to 1 --hdr-claims 2 --service service
 ```
 После выполнения команда выведет статистику, сколько объектов создано/обновлено.  
 Пароли для автоматически созданных пользователей задаются по умолчанию changeme123 и могут быть изменены администратором в админке.
