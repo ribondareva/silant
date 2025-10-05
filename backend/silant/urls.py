@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .api_views import (
     MachineViewSet, MaintenanceViewSet, ComplaintViewSet, ReferenceViewSet,
-    PublicMachineBySerial
+    PublicMachineBySerial, profile
 )
 
 router = DefaultRouter()
@@ -17,4 +17,5 @@ urlpatterns = [
     path("api/public/machine-by-serial/", PublicMachineBySerial.as_view()),
     path("api/auth/jwt/create/", TokenObtainPairView.as_view(), name="jwt_obtain"),
     path("api/auth/jwt/refresh/", TokenRefreshView.as_view(), name="jwt_refresh"),
+    path("api/auth/me/", profile, name="profile"),
 ]

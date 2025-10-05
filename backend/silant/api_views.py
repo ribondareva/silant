@@ -9,48 +9,80 @@ from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .roles import CLIENT_GROUP, SERVICE_GROUP, MANAGER_GROUP
 from .models import Machine, Maintenance, Complaint, Reference
 from .serializers import (
     MachineSerializer, MachinePublicSerializer,
     MaintenanceSerializer, ComplaintSerializer, ReferenceSerializer
 )
 from .permissions import IsManager, CanWriteMaintenance, CanWriteComplaint
+from .roles import CLIENT_GROUP, SERVICE_GROUP, MANAGER_GROUP
 
 
+# ---- активная роль из заголовка ----
 VALID_GROUPS = {CLIENT_GROUP, SERVICE_GROUP, MANAGER_GROUP}
+
 def _active_from_header(request, user):
+    """
+    Читает X-Active-Role и валидирует, что пользователь состоит в этой группе.
+    Возвращает 'manager' | 'service' | 'client' | None
+    """
     role = (request.headers.get("X-Active-Role") or "").strip().lower()
     if role in VALID_GROUPS and user.groups.filter(name=role).exists():
         return role
     return None
 
+
+# ---- профиль текущего пользователя ----
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profile(request):
+    u = request.user
+    return Response({
+        "id": u.id,
+        "username": u.username,
+        "first_name": u.first_name,
+        "groups": list(u.groups.values_list("name", flat=True)),
+    })
+
+
+# ---- ограничение queryset с учётом активной роли ----
 def limited_qs_for(user, request, queryset, is_child=False):
+    # анон на приватные списки не допущен
     if not user.is_authenticated:
         return queryset.none()
+
+    # staff/superuser — полный доступ
     if user.is_staff or user.is_superuser:
         return queryset
 
     active = _active_from_header(request, user)
 
+    # менеджер (выбран явно) — полный доступ
     if active == "manager":
         return queryset
 
+    # роль не задана — старое поведение (OR по клиенту/сервису)
     if not active:
         if is_child:
-            return queryset.filter(Q(machine__client=user) | Q(machine__service_company=user))
+            return queryset.filter(
+                Q(machine__client=user) | Q(machine__service_company=user)
+            )
         return queryset.filter(Q(client=user) | Q(service_company=user))
 
+    # явная роль service/client
     if active == "service":
-        return queryset.filter(machine__service_company=user) if is_child else queryset.filter(service_company=user)
+        return queryset.filter(machine__service_company=user) if is_child \
+               else queryset.filter(service_company=user)
 
     if active == "client":
-        return queryset.filter(machine__client=user) if is_child else queryset.filter(client=user)
+        return queryset.filter(machine__client=user) if is_child \
+               else queryset.filter(client=user)
 
+    # на всякий случай
     return queryset.none()
 
 
-# ----- Машины -----
+# ===== Машины =====
 class MachineViewSet(viewsets.ModelViewSet):
     queryset = Machine.objects.select_related(
         "model_technique", "model_engine", "model_transmission",
@@ -68,7 +100,7 @@ class MachineViewSet(viewsets.ModelViewSet):
     ordering = ("-shipment_date",)
 
     def get_queryset(self):
-        return limited_qs_for(self.request.user, super().get_queryset())
+        return limited_qs_for(self.request.user, self.request, super().get_queryset())
 
     def get_permissions(self):
         # писать машины — только менеджер
@@ -77,13 +109,13 @@ class MachineViewSet(viewsets.ModelViewSet):
         return [IsManager()]
 
 
-# ----- ТО -----
+# ===== ТО =====
 class MaintenanceViewSet(viewsets.ModelViewSet):
     queryset = Maintenance.objects.select_related(
         "machine", "kind", "organization", "service_company"
     ).all()
     serializer_class = MaintenanceSerializer
-    permission_classes = [CanWriteMaintenance]
+    permission_classes = [IsAuthenticated, CanWriteMaintenance]
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
@@ -94,16 +126,16 @@ class MaintenanceViewSet(viewsets.ModelViewSet):
     ordering = ("-performed_date",)
 
     def get_queryset(self):
-        return limited_qs_for(self.request.user, super().get_queryset(), is_child=True)
+        return limited_qs_for(self.request.user, self.request, super().get_queryset(), is_child=True)
 
 
-# ----- Рекламации -----
+# ===== Рекламации =====
 class ComplaintViewSet(viewsets.ModelViewSet):
     queryset = Complaint.objects.select_related(
         "machine", "failure_node", "recovery_method", "service_company"
     ).all()
     serializer_class = ComplaintSerializer
-    permission_classes = [CanWriteComplaint]
+    permission_classes = [IsAuthenticated, CanWriteComplaint]
 
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = {
@@ -114,10 +146,10 @@ class ComplaintViewSet(viewsets.ModelViewSet):
     ordering = ("-failure_date",)
 
     def get_queryset(self):
-        return limited_qs_for(self.request.user, super().get_queryset(), is_child=True)
+        return limited_qs_for(self.request.user, self.request, super().get_queryset(), is_child=True)
 
 
-# ----- Справочники -----
+# ===== Справочники =====
 class ReferenceViewSet(viewsets.ModelViewSet):
     queryset = Reference.objects.all()
     serializer_class = ReferenceSerializer

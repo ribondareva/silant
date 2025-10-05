@@ -1,3 +1,4 @@
+import React from "react";
 import { createContext, useContext, useState } from "react";
 import api from "../api/axios";
 
@@ -15,6 +16,12 @@ export default function AuthProvider({ children }) {
     localStorage.setItem("access", data.access);
     localStorage.setItem("refresh", data.refresh);
     localStorage.setItem("username", username);
+
+    const me = (await api.get("/api/auth/me/")).data;
+    const g = me.groups || [];
+    const pref = g.includes("manager") ? "manager" : g.includes("service") ? "service" : g.includes("client") ? "client" : null;
+    if (pref) localStorage.setItem("active_role", pref);
+
     setUser({ username });
   }
 
@@ -22,9 +29,9 @@ export default function AuthProvider({ children }) {
     localStorage.removeItem("access");
     localStorage.removeItem("refresh");
     localStorage.removeItem("username");
+    localStorage.removeItem("active_role");
     setUser(null);
   }
 
-  const value = { user, login, logout };
-  return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, login, logout }}>{children}</AuthCtx.Provider>;
 }
