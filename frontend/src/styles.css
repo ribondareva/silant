@@ -1,0 +1,19 @@
+:root{
+  --silant-blue:#163E6C;
+  --silant-red:#D20A11;
+  --silant-sand:#EBE6D6;
+}
+
+html,body,#root{height:100%;}
+body{margin:0;background:#fafafa;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'PT Astra Sans',Arial,sans-serif;}
+
+.header{
+  background:var(--silant-blue); color:white; padding:12px 16px;
+  display:flex; align-items:center; gap:12px;
+}
+.header .brand{font-weight:700; letter-spacing:.5px;}
+.container{padding:16px; max-width:1200px; margin:0 auto;}
+.tabbar{ background:white; border-bottom:1px solid #eee; }
+
+.ant-btn-primary{ background: var(--silant-red); }
+.ant-btn-primary:hover{ background: #b5090f; }

@@ -22,13 +22,20 @@ class RoleQuerysetMixin(LoginRequiredMixin):
 
     def get_base_filter(self):
         user = self.request.user
-        if is_manager(user):
-            return Q()  # без ограничений
-        if self.filter_on is None:
-            # это Machine
-            return Q(client=user) | Q(service_company=user)
-        # это дочерние сущности
-        return Q(**{f"{self.filter_on}__client": user}) | Q(**{f"{self.filter_on}__service_company": user})
+        if user.is_staff or user.is_superuser:
+            return Q()
+        active = _active_role(self.request, user)
+        if active == "manager":
+            return Q()
+        if not active:      
+            if self.filter_on is None:
+                return Q(client=user) | Q(service_company=user)
+            return Q(**{f"{self.filter_on}__client": user}) | Q(**{f"{self.filter_on}__service_company": user})
+        if active == "service":
+            return Q(service_company=user) if self.filter_on is None else Q(**{f"{self.filter_on}__service_company": user})
+        if active == "client":
+            return Q(client=user) if self.filter_on is None else Q(**{f"{self.filter_on}__client": user})
+        return Q()
 
     def get_queryset(self):
         qs = super().get_queryset()

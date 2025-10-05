@@ -1,26 +1,65 @@
 from django.core.management.base import BaseCommand, CommandParser
 from django.contrib.auth.models import User, Group
-from django.utils.text import slugify
 from django.db import transaction
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 import re
 import pandas as pd
+from slugify import slugify
 
 from silant.models import Reference, Machine, Maintenance, Complaint
 
+
+def _normalize_company_name(name: str) -> str:
+    """Унифицируем отображаемое имя: убираем кавычки, лишние пробелы, типографику."""
+    s = (name or "").strip()
+    # привести разные кавычки к обычным и убрать их
+    s = s.replace("«", '"').replace("»", '"').replace("“", '"').replace("”", '"')
+    s = s.replace("'", '"')
+    s = re.sub(r'"+', "", s)
+    # схлопнуть пробелы
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 def norm_val(s):
     if pd.isna(s):
         return ""
     return str(s).strip()
 
+def parse_days(value, fail_dt=None, rec_dt=None) -> Optional[int]:
+    """
+    Парсит 'время простоя, дни' из произвольной строки/числа.    
+    Если число не найдено — пытается вычислить по разнице дат.
+    """
+    s = norm_val(value)
+    if s:
+        m = re.search(r'([-+]?\d+(?:[.,]\d+)?)', s)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", "."))
+                d = int(round(val))
+                if d >= 0:
+                    return d
+            except Exception:
+                pass
+
+    # считаем по датам
+    if fail_dt and rec_dt:
+        try:
+            diff = (rec_dt - fail_dt).days
+            if diff >= 0 and diff < 10000:
+                return diff
+        except Exception:
+            pass
+
+    return None
+
 
 def parse_date(v):
+    """Понимает dd.mm.yyyy, yyyy-mm-dd, dd/mm/yyyy, dd.mm.yy, ISO и excel-serial."""
     if v is None or (isinstance(v, float) and pd.isna(v)) or (isinstance(v, str) and not v.strip()):
         return None
-
     if hasattr(v, "to_pydatetime"):
         v = v.to_pydatetime()
     if isinstance(v, datetime):
@@ -29,26 +68,19 @@ def parse_date(v):
         return v
 
     s = str(v).strip()
+    s_first = s.split(" ")[0] if " " in s else s
 
-    if " " in s:
-        s_first = s.split(" ")[0]
-    else:
-        s_first = s
-
-    # 1) обычные форматы
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d.%m.%y"):
         try:
             return datetime.strptime(s_first, fmt).date()
         except Exception:
             pass
 
-    # 2) ISO с временем
     try:
         return datetime.fromisoformat(s).date()
     except Exception:
         pass
 
-    # 3) серийник Excel (например "44625" или "44625.0")
     try:
         num = float(s.replace(",", "."))
         if 20000 <= num <= 80000:
@@ -61,7 +93,6 @@ def parse_date(v):
 
 
 def norm_col(s: str) -> str:
-    """приводим имя столбца к нормализованному виду"""
     s = str(s).lower()
     s = s.replace("№", "номер")
     s = re.sub(r"[\(\)\.,/\\\-]+", " ", s)
@@ -70,10 +101,8 @@ def norm_col(s: str) -> str:
 
 
 def find_col(df: pd.DataFrame, *candidates) -> Optional[str]:
-    """ищем колонку по набору кандидатов"""
     cols = {norm_col(c): c for c in df.columns}
     cand_norm = [norm_col(c) for c in candidates]
-    # точное совпадение
     for cn in cand_norm:
         if cn in cols:
             return cols[cn]
@@ -92,42 +121,64 @@ def ref(entity: str, name):
     return Reference.objects.get_or_create(entity=entity, name=name)[0]
 
 
-def get_or_create_user(name, group_name: str) -> Optional[User]:
-    name = norm_val(name)
+def get_or_create_user(name, group_name: str) -> User | None:
+    """
+    Ищем пользователя по 'человеческому' имени внутри группы.
+    Если нет — создаём с username на базе slug от нормализованного имени.
+    """
+    name = (name or "").strip()
     if not name:
         return None
 
-    # 1) транслитерирует кириллицу → латиницу
-    base = slugify(name)  # "ООО 'ФПК21'" -> "ooo-fpk21"
+    display_name = _normalize_company_name(name)
 
-    # 2) запасные варианты, если вдруг пусто
-    if not base:
-        base = group_name
+    # 1) точное совпадение по first_name в нужной группе (без учёта регистра)
+    user = (User.objects
+            .filter(groups__name=group_name, first_name__iexact=display_name)
+            .first())
+    if user:
+        return user
+
+    # 2) совпадение по "нормализованному" first_name
+    for u in User.objects.filter(groups__name=group_name).only("id", "first_name"):
+        if _normalize_company_name(u.first_name) == display_name:
+            return u
+
+    # 3) создаём нового
+    base = slugify(display_name, separator="-")[:120] or group_name
     base = base.strip("._-") or group_name
 
-    # 3) гарантированная уникальность
     username = base
     i = 2
     while User.objects.filter(username=username).exists():
+        # Доп. защита от дублей
+        u = (User.objects
+             .filter(username=username, groups__name=group_name)
+             .first())
+        if u and _normalize_company_name(u.first_name) == display_name:
+            return u
         username = f"{base}-{i}"
         i += 1
 
-    user = User.objects.filter(username=username).first()
-    if not user:
-        user = User.objects.create_user(username=username, password="changeme123", is_active=True)
-        grp, _ = Group.objects.get_or_create(name=group_name)
-        user.groups.add(grp)
-        user.save()
+    user = User.objects.create_user(
+        username=username,
+        password="changeme123",
+        is_active=True,
+        first_name=display_name,
+    )
+    grp, _ = Group.objects.get_or_create(name=group_name)
+    user.groups.add(grp)
+    user.save()
     return user
 
 
 def read_sheet(path: str, sheet: str, header_hint: Optional[int]) -> pd.DataFrame:
     """
-    Читает лист Excel. Если header_hint задан (1-based) — используем его.
-    Иначе пытаемся autodetect в первых 10 строках.
+    Читает лист Excel. Если header_hint задан (1-based) — используем его,
+    иначе пытаемся autodetect по «якорям» в первых 10 строках.
     """
     if header_hint:
-        hdr = int(header_hint) - 1  # 1-based -> 0-based
+        hdr = int(header_hint) - 1
         return pd.read_excel(path, sheet_name=sheet, header=hdr, dtype=str, engine="openpyxl")
 
     raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=str, engine="openpyxl")
@@ -141,23 +192,21 @@ def read_sheet(path: str, sheet: str, header_hint: Optional[int]) -> pd.DataFram
     return pd.read_excel(path, sheet_name=sheet, header=hdr, dtype=str, engine="openpyxl")
 
 
+# ---------------- command ----------------
+
 class Command(BaseCommand):
     help = "Импорт из Excel: машины, ТО, рекламации"
 
     def add_arguments(self, parser: CommandParser):
         parser.add_argument("path", help="Путь к .xlsx")
-
-        # названия листов
         parser.add_argument("--machines", default="машины")
         parser.add_argument("--to", default="ТО output")
         parser.add_argument("--claims", default="рекламация output")
 
-        # строка заголовков (1-based)
-        parser.add_argument("--hdr-machines", type=int, default=None, help="Строка заголовков листа 'машины' (1-based)")
-        parser.add_argument("--hdr-to", type=int, default=None, help="Строка заголовков листа 'ТО output' (1-based)")
-        parser.add_argument("--hdr-claims", type=int, default=None, help="Строка заголовков листа 'рекламация output' (1-based)")
+        parser.add_argument("--hdr-machines", type=int, default=None)
+        parser.add_argument("--hdr-to", type=int, default=None)
+        parser.add_argument("--hdr-claims", type=int, default=None)
 
-        # сервисная компания по умолчанию (username)
         parser.add_argument("--service", default=None, help="username сервисной компании по умолчанию")
 
     @transaction.atomic
@@ -165,14 +214,13 @@ class Command(BaseCommand):
         path = str(Path(path))
         self.stdout.write(self.style.NOTICE(f"Читаю файл: {path}"))
 
-        # сервисная компания по умолчанию
         default_service = User.objects.filter(username=service).first() if service else None
         if service and not default_service:
             default_service = User.objects.create_user(username=service, password="changeme123", is_active=True)
             g, _ = Group.objects.get_or_create(name="service")
             default_service.groups.add(g)
 
-        # ---------- МАШИНЫ ----------
+        # ---- Машины ----
         try:
             df_m = read_sheet(path, machines, hdr_machines)
         except Exception as e:
@@ -238,7 +286,7 @@ class Command(BaseCommand):
                 updated += int(not was_created)
             self.stdout.write(self.style.SUCCESS(f"Машины: создано {created}, обновлено {updated}"))
 
-        # ---------- ТО ----------
+        # ---- ТО ----
         try:
             df_to = read_sheet(path, to, hdr_to)
         except Exception as e:
@@ -278,7 +326,7 @@ class Command(BaseCommand):
                 cnt += 1
             self.stdout.write(self.style.SUCCESS(f"ТО: загружено {cnt} записей"))
 
-        # ---------- Рекламации ----------
+        # ---- Рекламации ----
         try:
             df_c = read_sheet(path, claims, hdr_claims)
         except Exception as e:
@@ -286,15 +334,15 @@ class Command(BaseCommand):
             df_c = None
 
         if df_c is not None:
-            c_sn       = find_col(df_c, "зав. номер")   # «Зав. №»
+            c_sn       = find_col(df_c, "зав. номер")
             c_fail_dt  = find_col(df_c, "дата отказа")
-            c_hours    = find_col(df_c, "наработка")    # «наработка, ...»
+            c_hours    = find_col(df_c, "наработка")
             c_node     = find_col(df_c, "узел отказа")
             c_descr    = find_col(df_c, "описание отказа")
-            c_method   = find_col(df_c, "способ")       # «способ восстановления»
+            c_method   = find_col(df_c, "способ")
             c_parts    = find_col(df_c, "используемые")
-            c_rec_dt   = find_col(df_c, "дата")         # дата восстановления
-            c_down     = find_col(df_c, "время")        # время простоя, дни (опц.)
+            c_rec_dt   = find_col(df_c, "дата")
+            c_down     = find_col(df_c, "время")   # колонка называется именно «Время»
 
             cnt = 0
             for _, row in df_c.iterrows():
@@ -305,26 +353,46 @@ class Command(BaseCommand):
                 if not machine:
                     continue
 
+                fail_dt = parse_date(row.get(c_fail_dt))
+                rec_dt  = parse_date(row.get(c_rec_dt))
+
                 obj, _ = Complaint.objects.get_or_create(
                     machine=machine,
-                    failure_date=parse_date(row.get(c_fail_dt)),
+                    failure_date=fail_dt,
                     failure_node=ref("Узел отказа", row.get(c_node)),
                     defaults=dict(
                         operating_hours=int(float(norm_val(row.get(c_hours) or "0"))),
                         failure_description=norm_val(row.get(c_descr)),
                         recovery_method=ref("Способ восстановления", row.get(c_method)),
                         parts_used=norm_val(row.get(c_parts)),
-                        recovery_date=parse_date(row.get(c_rec_dt)),
+                        recovery_date=rec_dt,
                         service_company=machine.service_company or default_service,
                     ),
                 )
-                # если в файле есть "Время", подставим
-                try:
-                    days = int(float(norm_val(row.get(c_down)))) if c_down else None
-                    if days is not None and obj.downtime_days != days:
-                        obj.downtime_days = max(0, days)
-                        obj.save(update_fields=["downtime_days"])
-                except Exception:
-                    pass
+
+                # аккуратно проставляем время простоя (дни)
+                days = parse_days(row.get(c_down), fail_dt=fail_dt, rec_dt=rec_dt) if c_down else None
+                if days is not None and obj.downtime_days != days:
+                    obj.downtime_days = days
+                    obj.save(update_fields=["downtime_days"])
+
                 cnt += 1
             self.stdout.write(self.style.SUCCESS(f"Рекламации: загружено {cnt} записей"))
+
+        # ---------- Менеджер ----------
+        manager_username = "manager"
+        manager_password = "changeme123"
+
+        manager, created = User.objects.get_or_create(username=manager_username)
+        if created:
+            manager.set_password(manager_password)
+            manager.is_staff = True
+            manager.is_active = True
+            manager.save()
+            g, _ = Group.objects.get_or_create(name="manager")
+            manager.groups.add(g)
+            self.stdout.write(self.style.SUCCESS(
+                f"Менеджер создан: {manager_username} / {manager_password}"
+            ))
+        else:
+            self.stdout.write(self.style.NOTICE(f"Менеджер уже есть: {manager_username}"))

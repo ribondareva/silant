@@ -23,7 +23,8 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'silant.apps.SilantConfig',
-    'drf_yasg'
+    'drf_yasg',
+    "corsheaders",
 ]
 
 SITE_ID = 1
@@ -55,8 +56,9 @@ MIDDLEWARE = [
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",          # ← для логина через браузер
-        "rest_framework_simplejwt.authentication.JWTAuthentication",    # ← для Postman/curl
+        "rest_framework.authentication.BasicAuthentication",
+        "rest_framework.authentication.SessionAuthentication"       
+       
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -79,7 +81,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
 ]
-
+CORS_ALLOW_CREDENTIALS = True
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

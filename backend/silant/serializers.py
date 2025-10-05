@@ -1,5 +1,12 @@
+from django.contrib.auth.models import User
 from rest_framework import serializers
 from .models import Machine, Maintenance, Complaint, Reference
+
+
+class UserSlimSerializer(serializers.ModelSerializer):
+    class Meta: 
+        model = User
+        fields = ("id", "username", "first_name")
 
 class ReferenceSerializer(serializers.ModelSerializer):
     class Meta:
@@ -7,6 +14,8 @@ class ReferenceSerializer(serializers.ModelSerializer):
         fields = ["id", "entity", "name", "description"]
 
 class MachineSerializer(serializers.ModelSerializer):
+    client = UserSlimSerializer(read_only=True)
+    service_company = UserSlimSerializer(read_only=True)
     model_technique_name   = serializers.CharField(source="model_technique.name", read_only=True)
     model_engine_name      = serializers.CharField(source="model_engine.name", read_only=True)
     model_transmission_name= serializers.CharField(source="model_transmission.name", read_only=True)
@@ -44,19 +53,22 @@ class MachinePublicSerializer(serializers.ModelSerializer):
 class MaintenanceSerializer(serializers.ModelSerializer):
     kind_name = serializers.CharField(source="kind.name", read_only=True)
     machine_serial = serializers.CharField(source="machine.serial_number", read_only=True)
+    service_company = UserSlimSerializer(read_only=True)
+    organization_name = serializers.CharField(source="organization.name", read_only=True)
 
     class Meta:
         model = Maintenance
         fields = [
             "id","machine","machine_serial","kind","kind_name","performed_date","operating_hours",
-            "work_order_number","work_order_date","organization","service_company",
+            "work_order_number","work_order_date","organization", "organization_name", "service_company",
         ]
 
 class ComplaintSerializer(serializers.ModelSerializer):
     failure_node_name = serializers.CharField(source="failure_node.name", read_only=True)
     recovery_method_name = serializers.CharField(source="recovery_method.name", read_only=True)
     machine_serial = serializers.CharField(source="machine.serial_number", read_only=True)
-
+    service_company = UserSlimSerializer(read_only=True)
+    
     class Meta:
         model = Complaint
         fields = [

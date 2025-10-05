@@ -26,7 +26,7 @@ class CanWriteMaintenance(BasePermission):
         return False
 
 class CanWriteComplaint(CanWriteMaintenance):
-    # клиент НЕ может создавать/менять рекламации: переопределяем
+    # клиент НЕ может создавать/менять рекламации
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS: return True
         u = request.user

@@ -2,13 +2,14 @@ from django.db.models import Q
 from rest_framework import viewsets, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from rest_framework.decorators import api_view, permission_classes
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter
-
+from rest_framework.permissions import IsAuthenticated
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
+from .roles import CLIENT_GROUP, SERVICE_GROUP, MANAGER_GROUP
 from .models import Machine, Maintenance, Complaint, Reference
 from .serializers import (
     MachineSerializer, MachinePublicSerializer,
@@ -17,16 +18,36 @@ from .serializers import (
 from .permissions import IsManager, CanWriteMaintenance, CanWriteComplaint
 
 
-# ----- ограничение queryset по роли -----
-def limited_qs_for(user, queryset, is_child=False):
-    if user.is_staff or user.is_superuser or user.groups.filter(name="manager").exists():
+VALID_GROUPS = {CLIENT_GROUP, SERVICE_GROUP, MANAGER_GROUP}
+def _active_from_header(request, user):
+    role = (request.headers.get("X-Active-Role") or "").strip().lower()
+    if role in VALID_GROUPS and user.groups.filter(name=role).exists():
+        return role
+    return None
+
+def limited_qs_for(user, request, queryset, is_child=False):
+    if not user.is_authenticated:
+        return queryset.none()
+    if user.is_staff or user.is_superuser:
         return queryset
-    if is_child:
-        return queryset.filter(
-            Q(machine__client=user) | Q(machine__service_company=user)
-        )
-    # для Machine
-    return queryset.filter(Q(client=user) | Q(service_company=user))
+
+    active = _active_from_header(request, user)
+
+    if active == "manager":
+        return queryset
+
+    if not active:
+        if is_child:
+            return queryset.filter(Q(machine__client=user) | Q(machine__service_company=user))
+        return queryset.filter(Q(client=user) | Q(service_company=user))
+
+    if active == "service":
+        return queryset.filter(machine__service_company=user) if is_child else queryset.filter(service_company=user)
+
+    if active == "client":
+        return queryset.filter(machine__client=user) if is_child else queryset.filter(client=user)
+
+    return queryset.none()
 
 
 # ----- Машины -----

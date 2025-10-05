@@ -52,10 +52,12 @@ class Machine(models.Model):
     )
 
     class Meta:
+        verbose_name = "Машина"
+        verbose_name_plural = "Машины"
         ordering = ["-shipment_date"]
 
     def __str__(self):
-        return f"{self.model_technique.name} SN:{self.serial_number}"
+        return f"{self.serial_number}"
 
 
 
@@ -185,13 +187,13 @@ class Complaint(models.Model):
             raise ValidationError("Дата восстановления не может быть раньше даты отказа.")
 
     def save(self, *args, **kwargs):
-        # пересчёт простоя перед сохранением
-        if self.recovery_date:
-            self.downtime_days = (self.recovery_date - self.failure_date).days
-            if self.downtime_days < 0:
-                self.downtime_days = 0
-        else:
-            self.downtime_days = 0
+        """
+        Если downtime_days уже установлен (импортом/ручным вводом) — не трогаем.
+        Если не установлен (=0) и есть обе даты — считаем по датам.
+        """
+        if (self.downtime_days in (None, 0)) and self.recovery_date:
+            days = (self.recovery_date - self.failure_date).days
+            self.downtime_days = max(0, days)
         super().save(*args, **kwargs)
 
     def __str__(self):

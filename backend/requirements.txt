@@ -5,7 +5,7 @@ django-allauth>=0.63
 djangorestframework-simplejwt>=5.3.1
 django-cors-headers>=4.4
 drf-yasg>=1.21.7
-
+python-slugify>=8.0
 # импорт Excel
 pandas>=2.2.2
 openpyxl>=3.1.5

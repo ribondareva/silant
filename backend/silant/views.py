@@ -9,6 +9,7 @@ from .models import Machine, Maintenance, Complaint
 from .filters import MachineFilter, MaintenanceFilter, ComplaintFilter
 from .acl import RoleQuerysetMixin, OwnerWriteRequiredMixin
 
+
 # --- Домашний редирект: аноним -> public_lookup, авторизованный -> список машин
 class HomeRedirectView(RedirectView):
     permanent = False
